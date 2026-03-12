@@ -1,0 +1,5 @@
+{
+  "name": "Frames Agent Wallet UI",
+  "description": "A web interface to interact with Frames Agent Wallet API for Base Sepolia transactions.",
+  "requestFramePermissions": []
+}
