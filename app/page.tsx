@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
+import ReactMarkdown from 'react-markdown';
 import { 
   Wallet, 
   Key, 
@@ -17,8 +18,13 @@ import {
   Zap,
   LayoutDashboard,
   Sparkles,
-  ExternalLink
+  ExternalLink,
+  Mail,
+  Lock,
+  PlusCircle,
+  BookOpen
 } from 'lucide-react';
+import { GoogleGenAI } from "@google/genai";
 import { motion, AnimatePresence } from 'motion/react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -117,6 +123,7 @@ const ActionButton = ({ onClick, loading, icon: Icon, label, variant = "primary"
 // --- Main Page ---
 
 export default function FramesDashboard() {
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'create-wallet' | 'instructions'>('dashboard');
   const [config, setConfig] = useState<ConfigData | null>(null);
   const [walletInfo, setWalletInfo] = useState<WalletInfo | null>(null);
   const [balances, setBalances] = useState<Balance[]>([]);
@@ -130,7 +137,78 @@ export default function FramesDashboard() {
   const [lastSolTransferResponse, setLastSolTransferResponse] = useState<any>(null);
   const [lastSolTxHash, setLastSolTxHash] = useState<string | null>(null);
 
+  // --- Connection Flow State ---
+  const [connectEmail, setConnectEmail] = useState("");
+  const [connectOtp, setConnectOtp] = useState("");
+  const [connectStep, setConnectStep] = useState<'email' | 'otp'>('email');
+  const [isConnecting, setIsConnecting] = useState(false);
 
+  const startConnection = async () => {
+    if (!connectEmail) return;
+    setIsConnecting(true);
+    try {
+      const res = await fetch('/api/proxy?path=connect/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: connectEmail })
+      });
+      if (!res.ok) throw new Error('Failed to start connection');
+      setConnectStep('otp');
+      addLog('info', `OTP sent to ${connectEmail}`);
+    } catch (err: any) {
+      addLog('error', err.message);
+    } finally {
+      setIsConnecting(false);
+    }
+  };
+
+  const completeConnection = async () => {
+    if (!connectOtp) return;
+    setIsConnecting(true);
+    try {
+      const res = await fetch('/api/proxy?path=connect/complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: connectEmail, otp: connectOtp })
+      });
+      if (!res.ok) throw new Error('Failed to complete connection');
+      const data = await res.json();
+      
+      // data should contain username and apiToken
+      if (data.username && data.apiToken) {
+        const newConfig = { username: data.username, apiToken: data.apiToken };
+        setConfig(newConfig);
+        addLog('success', `Connected successfully as ${data.username}!`);
+        setConnectStep('email');
+        setConnectEmail("");
+        setConnectOtp("");
+      } else {
+        throw new Error('Invalid response from server');
+      }
+    } catch (err: any) {
+      addLog('error', err.message);
+    } finally {
+      setIsConnecting(false);
+    }
+  };
+
+  const generateAIFeedback = async () => {
+    setLoading(prev => ({ ...prev, aiFeedback: true }));
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY! });
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: "Generate a short, professional feedback/testimonial (1-2 sentences) about using Frames.ag AgentWallet API for blockchain transactions (EVM/Solana). Make it sound like a developer who just tested a feature like transfers or message signing. Vary the tone and specific feature mentioned. Do not use quotes.",
+      });
+      const text = response.text || "";
+      setFeedbackText(text.trim());
+      addLog('info', 'AI Feedback generated');
+    } catch (err: any) {
+      addLog('error', 'Failed to generate AI feedback');
+    } finally {
+      setLoading(prev => ({ ...prev, aiFeedback: false }));
+    }
+  };
 
   const { register, handleSubmit, formState: { errors } } = useForm<ConfigData>({
     resolver: zodResolver(configSchema),
@@ -429,7 +507,32 @@ export default function FramesDashboard() {
             </div>
             <h1 className="text-xl font-bold tracking-tight text-slate-800">Frames Agent</h1>
           </div>
-          <div className="flex items-center gap-4">
+          
+          <nav className="hidden md:flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
+            <button 
+              onClick={() => setActiveTab('dashboard')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === 'dashboard' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+            >
+              <LayoutDashboard size={16} />
+              Dashboard
+            </button>
+            <button 
+              onClick={() => setActiveTab('create-wallet')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === 'create-wallet' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+            >
+              <PlusCircle size={16} />
+              Create Wallet
+            </button>
+            <button 
+              onClick={() => setActiveTab('instructions')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === 'instructions' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+            >
+              <BookOpen size={16} />
+              Instructions
+            </button>
+          </nav>
+
+          <div className="flex items-center gap-6">
             {config && (
               <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-indigo-50 rounded-full border border-indigo-100">
                 <div className="w-2 h-2 bg-indigo-500 rounded-full animate-pulse" />
@@ -442,10 +545,18 @@ export default function FramesDashboard() {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-          
-          {/* Column 1: Config & Wallet Info */}
-          <div className="lg:col-span-4 space-y-8">
+        <AnimatePresence mode="wait">
+          {activeTab === 'dashboard' && (
+            <motion.div 
+              key="dashboard"
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 20 }}
+              className="grid grid-cols-1 lg:grid-cols-12 gap-8"
+            >
+              
+              {/* Column 1: Config & Wallet Info */}
+              <div className="lg:col-span-4 space-y-8">
             {/* 1. Configuration */}
             <Card title="Configuration" icon={Key}>
               <form onSubmit={handleSubmit(onSaveConfig)} className="space-y-4">
@@ -466,12 +577,28 @@ export default function FramesDashboard() {
                   placeholder=""
                   autoComplete="current-password"
                 />
-                <ActionButton 
-                  type="submit"
-                  label={config ? "Update Config" : "Save Config"} 
-                  icon={CheckCircle2} 
-                  className="w-full"
-                />
+                <div className="flex gap-2">
+                  <ActionButton 
+                    type="submit"
+                    label={config ? "Update Config" : "Save Config"} 
+                    icon={CheckCircle2} 
+                    className="flex-1"
+                  />
+                  {config && (
+                    <ActionButton 
+                      onClick={() => {
+                        setConfig(null);
+                        setWalletInfo(null);
+                        setBalances([]);
+                        addLog('info', 'Configuration cleared');
+                      }}
+                      label="Disconnect" 
+                      icon={RefreshCw} 
+                      variant="outline"
+                      className="flex-1"
+                    />
+                  )}
+                </div>
               </form>
               <p className="mt-4 text-[10px] text-slate-400 italic leading-tight">
                 *Data is only stored in browser memory (not sent to any server other than Frames.ag API).
@@ -745,7 +872,7 @@ export default function FramesDashboard() {
 
                   {transferSolData.chain === 'solana-devnet' && (
                     <button 
-                      onClick={requestFaucet}
+                      onClick={requestFaucet} 
                       disabled={loading.faucet}
                       className="w-full py-2 px-4 bg-amber-50 text-amber-700 border border-amber-200 rounded-xl text-xs font-bold hover:bg-amber-100 transition-colors flex items-center justify-center gap-2"
                     >
@@ -839,41 +966,131 @@ export default function FramesDashboard() {
               </div>
             </Card>
           </div>
-        </div>
 
-        {/* Row 2: Activity Logs */}
-        <div className="mt-8">
-          <Card title="Activity Logs" icon={LayoutDashboard}>
-            <div className="bg-slate-900 rounded-xl overflow-hidden shadow-inner">
-              <div className="flex items-center justify-between px-4 py-2 bg-slate-800 border-b border-slate-700">
-                <div className="flex gap-1.5">
-                  <div className="w-2.5 h-2.5 rounded-full bg-red-500" />
-                  <div className="w-2.5 h-2.5 rounded-full bg-amber-500" />
-                  <div className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
+          {/* Row 2: Activity Logs - Moved inside Dashboard */}
+          <div className="mt-8 col-span-full">
+            <Card title="Activity Logs" icon={LayoutDashboard}>
+              <div className="bg-slate-900 rounded-xl overflow-hidden shadow-inner">
+                <div className="flex items-center justify-between px-4 py-2 bg-slate-800 border-b border-slate-700">
+                  <div className="flex gap-1.5">
+                    <div className="w-2.5 h-2.5 rounded-full bg-red-500" />
+                    <div className="w-2.5 h-2.5 rounded-full bg-amber-500" />
+                    <div className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
+                  </div>
+                  <span className="text-[10px] font-mono text-slate-500 uppercase tracking-widest">Console Output</span>
                 </div>
-                <span className="text-[10px] font-mono text-slate-500 uppercase tracking-widest">Console Output</span>
+                <div className="h-64 overflow-y-auto p-4 font-mono text-xs space-y-2 scrollbar-thin scrollbar-thumb-slate-700">
+                  {logs.length === 0 ? (
+                    <p className="text-slate-600 italic">Waiting for activity...</p>
+                  ) : (
+                    logs.map((log, i) => (
+                      <div key={i} className="flex gap-3 animate-in fade-in slide-in-from-left-2 duration-300">
+                        <span className="text-slate-500 shrink-0">[{log.timestamp}]</span>
+                        <span className={`
+                          ${log.type === 'success' ? 'text-emerald-400' : ''}
+                          ${log.type === 'error' ? 'text-red-400' : ''}
+                          ${log.type === 'info' ? 'text-indigo-400' : ''}
+                        `}>
+                          {log.type === 'error' ? '✖' : log.type === 'success' ? '✔' : 'ℹ'} {log.message}
+                        </span>
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
-              <div className="h-64 overflow-y-auto p-4 font-mono text-xs space-y-2 scrollbar-thin scrollbar-thumb-slate-700">
-                {logs.length === 0 ? (
-                  <p className="text-slate-600 italic">Waiting for activity...</p>
-                ) : (
-                  logs.map((log, i) => (
-                    <div key={i} className="flex gap-3 animate-in fade-in slide-in-from-left-2 duration-300">
-                      <span className="text-slate-500 shrink-0">[{log.timestamp}]</span>
-                      <span className={`
-                        ${log.type === 'success' ? 'text-emerald-400' : ''}
-                        ${log.type === 'error' ? 'text-red-400' : ''}
-                        ${log.type === 'info' ? 'text-indigo-400' : ''}
-                      `}>
-                        {log.type === 'error' ? '✖' : log.type === 'success' ? '✔' : 'ℹ'} {log.message}
-                      </span>
+            </Card>
+          </div>
+        </motion.div>
+      )}
+
+        {activeTab === 'create-wallet' && (
+          <motion.div 
+            key="create-wallet"
+            initial={{ opacity: 0, scale: 0.98 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.98 }}
+            className="w-full h-[calc(100vh-12rem)] bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm"
+          >
+            <iframe 
+              src="https://frames.ag/connect?ref=orbitaliansyah" 
+              className="w-full h-full border-none"
+              title="Create Wallet"
+            />
+          </motion.div>
+        )}
+
+        {activeTab === 'instructions' && (
+          <motion.div 
+            key="instructions"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="max-w-4xl mx-auto space-y-8"
+          >
+            <Card title="Usage Instructions" icon={BookOpen}>
+              <div className="space-y-6 text-slate-700">
+                <div className="flex gap-4">
+                  <div className="flex-shrink-0 w-8 h-8 bg-indigo-600 text-white rounded-full flex items-center justify-center font-bold">1</div>
+                  <div>
+                    <p className="font-semibold text-slate-800">Create Wallet Connect To Agent</p>
+                    <p className="text-sm text-slate-500">Open the &quot;Create Wallet&quot; tab to start the wallet creation process.</p>
+                  </div>
+                </div>
+
+                <div className="flex gap-4">
+                  <div className="flex-shrink-0 w-8 h-8 bg-indigo-600 text-white rounded-full flex items-center justify-center font-bold">2</div>
+                  <div className="space-y-3 flex-1">
+                    <div>
+                      <p className="font-semibold text-slate-800">Submit email and send verification</p>
+                      <p className="text-sm text-slate-500">Enter your email and click the verification button to receive an OTP. (Note: the submit button is below the email box, click it even if it&apos;s not clearly visible).</p>
                     </div>
-                  ))
-                )}
+                    <div className="p-2 bg-slate-100 rounded-xl border border-slate-200 overflow-hidden max-w-2xl">
+                      <img 
+                        src="https://lh3.googleusercontent.com/d/1DpSvGblOKtZ1yWj9CZzrr3PO_Rhf88p4" 
+                        alt="Email Verification Step" 
+                        className="rounded-lg shadow-sm w-full"
+                      />
+                      <p className="text-[10px] text-center mt-2 text-slate-400 italic">Visual guide for email submission</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex gap-4">
+                  <div className="flex-shrink-0 w-8 h-8 bg-indigo-600 text-white rounded-full flex items-center justify-center font-bold">3</div>
+                  <div className="space-y-3 flex-1">
+                    <p className="font-semibold text-slate-800">Submit OTP</p>
+                    <p className="text-sm text-slate-500">Enter the OTP code sent to your email.</p>
+                  </div>
+                </div>
+
+                <div className="flex gap-4">
+                  <div className="flex-shrink-0 w-8 h-8 bg-indigo-600 text-white rounded-full flex items-center justify-center font-bold">4</div>
+                  <div>
+                    <p className="font-semibold text-slate-800">Copy Agent Output</p>
+                    <p className="text-sm text-slate-500">Copy the Agent output containing your Username, API Token, and Wallet Address. This data will be used for transactions.</p>
+                  </div>
+                </div>
+
+                <div className="flex gap-4">
+                  <div className="flex-shrink-0 w-8 h-8 bg-indigo-600 text-white rounded-full flex items-center justify-center font-bold">5</div>
+                  <div>
+                    <p className="font-semibold text-slate-800">Fund Wallet</p>
+                    <p className="text-sm text-slate-500">Fund your EVM wallet with Base Sepolia and your Solana wallet with Solana Devnet.</p>
+                  </div>
+                </div>
+
+                <div className="flex gap-4">
+                  <div className="flex-shrink-0 w-8 h-8 bg-indigo-600 text-white rounded-full flex items-center justify-center font-bold">6</div>
+                  <div>
+                    <p className="font-semibold text-slate-800">Provide Feedback</p>
+                    <p className="text-sm text-slate-500">Don&apos;t forget to provide your feedback through the feedback form on the dashboard.</p>
+                  </div>
+                </div>
               </div>
-            </div>
-          </Card>
-        </div>
+            </Card>
+          </motion.div>
+        )}
+        </AnimatePresence>
       </main>
 
       {/* Footer */}
